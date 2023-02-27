@@ -22,6 +22,7 @@ import com.google.api.core.ApiFutureCallback
 import com.google.api.core.ApiFutures
 import com.google.cloud.bigquery.*
 import com.google.cloud.bigquery.storage.v1.*
+import com.google.cloud.bigquery.storage.v1.BigQueryWriteClient
 import com.google.common.util.concurrent.MoreExecutors
 //import com.google.protobuf.Descriptors.DescriptorValidationException
 //import org.jetbrains.kotlin.protobuf.Descriptors.DescriptorValidationException
@@ -93,7 +94,10 @@ object JsonWriterDefaultStream {
         val batchCount = AtomicInteger()
         // Use the JSON stream writer to send records in JSON format.
         val parentTable: TableName = TableName.of(projectId, datasetName, tableName)
-        JsonStreamWriter.newBuilder(parentTable.toString(), tableSchema).build().use { writer ->
+
+        val client = BigQueryWriteClient.create()
+
+        JsonStreamWriter.newBuilder(parentTable.toString(), tableSchema, client).build().use { writer ->
             // Read JSON data from the source file and send it to the Write API.
             val reader = BufferedReader(FileReader(dataFile))
             var line = reader.readLine()
@@ -120,7 +124,8 @@ object JsonWriterDefaultStream {
                         batchCount.incrementAndGet()
                     }
 
-                }, MoreExecutors.directExecutor())            }
+                }, MoreExecutors.directExecutor())
+            }
         }
 
         println("${batchCount.get()} Batches written")
