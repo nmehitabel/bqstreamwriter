@@ -72,9 +72,10 @@ object JsonWriterDefaultStream {
         val tableId: TableId = TableId.of(projectId, datasetName, tableName)
         val table: Table? = bigquery.getTable(tableId)
         if (table == null) {
-            val tableInfo: TableInfo = TableInfo.newBuilder(tableId, StandardTableDefinition.of(schema)).build()
+            val tableInfo: TableInfo = TableInfo.newBuilder(tableId, StandardTableDefinition.of(schema))
+                .setExpirationTime(86400 * 4)
+                .build()
             bigquery.create(tableInfo)
-        }
     }
 
     // writeToDefaultStream: Writes records from the source file to the destination table.
