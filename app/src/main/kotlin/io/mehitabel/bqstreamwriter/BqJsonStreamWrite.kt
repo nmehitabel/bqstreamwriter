@@ -76,15 +76,11 @@ object JsonWriterDefaultStream {
                 .setExpirationTime(86400 * 4)
                 .build()
             bigquery.create(tableInfo)
+        }
     }
 
     // writeToDefaultStream: Writes records from the source file to the destination table.
-    @Throws(
-        //org.jetbrains.kotlin.protobuf.Descriptors.DescriptorValidationException::class,
-        InterruptedException::class,
-        IOException::class
-    )
-    fun writeToDefaultStream(
+     fun writeToDefaultStream(
         projectId: String, datasetName: String, tableName: String, dataFile: String
     ) {
         val bigquery: BigQuery = BigQueryOptions.getDefaultInstance().getService()
