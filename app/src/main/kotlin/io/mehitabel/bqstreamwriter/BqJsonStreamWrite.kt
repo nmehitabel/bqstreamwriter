@@ -35,12 +35,13 @@ import org.json.JSONObject
 import java.io.*
 import java.util.concurrent.atomic.AtomicInteger
 
-
 object JsonWriterDefaultStream {
-    suspend fun run(projectId: String,
-            datasetName: String,
-            tableName: String,
-            dataFile: String) {
+    suspend fun run(
+        projectId: String,
+        datasetName: String,
+        tableName: String,
+        dataFile: String
+    ) {
 
         val batchCount = AtomicInteger()
 
@@ -48,17 +49,10 @@ object JsonWriterDefaultStream {
 
         createDestinationTable(bigQueryService, projectId, datasetName, tableName)
 
-//        runBlocking {getFileDataBatchedJson(dataFile).collect {println(it)}}
-        //writeToDefaultStream(projectId, datasetName, tableName, dataFile)
-        //runBlocking {
-            //launch {
         coroutineScope {
             createDefaultStream(bigQueryService, projectId, datasetName, tableName).use { jsWriter ->
-                // launch {
                 getFileDataBatchedJson(dataFile)
                     .onEach { ljo ->
-                        //println("ljo : $ljo")
-                        //run {
                         val future: ApiFuture<AppendRowsResponse> = jsWriter.append(JSONArray(ljo))
                         // The append method is asynchronous. Rather than waiting for the method to complete,
                         // which can hurt performance, register a completion callback and continue streaming.
@@ -72,25 +66,22 @@ object JsonWriterDefaultStream {
                             }
 
                         }, MoreExecutors.directExecutor())
-                        //}
                     }
                     .collect()
-                // } launch
             }
-            //} launch
         }
-        // } rb
         println("${batchCount.get()} Batches written")
 
     }
 
     fun InputStream.linesToFlow(): Flow<String> =
         bufferedReader().lineSequence().asFlow().flowOn(Dispatchers.IO)
+
     fun getFileDataBatchedJson(dataFile: String): Flow<List<JSONObject>> {
         val reader: InputStream = FileInputStream(File(dataFile))
         return reader
             .linesToFlow()
-            .map { it -> JSONObject(it)}
+            .map { it -> JSONObject(it) }
             .chunked(100)
     }
 
@@ -132,93 +123,27 @@ object JsonWriterDefaultStream {
     }
 
 
-     suspend fun createDefaultStream (service: BigQuery, projectId: String, datasetName: String, tableName: String): JsonStreamWriter {
-         //val bigquery: BigQuery = BigQueryOptions.getDefaultInstance().getService()
-         // Get the schema of the destination table and convert to the equivalent BigQueryStorage type.
-         val table: Table = service.getTable(datasetName, tableName)
-         val schema: Schema? = table.getDefinition<StandardTableDefinition>().getSchema()
-         val tableSchema: TableSchema = BqToBqStorageSchemaConverter.convertTableSchema(schema!!) // force npe if null
-         //val batchCount = AtomicInteger()
-         // Use the JSON stream writer to send records in JSON format.
-         val parentTable: TableName = TableName.of(projectId, datasetName, tableName)
-
-         val client = BigQueryWriteClient.create()
-
-         return JsonStreamWriter.newBuilder(parentTable.toString(), tableSchema, client).build()
-     }
-
-
-    // writeToDefaultStream: Writes records from the source file to the destination table.
-     fun writeToDefaultStream(
-        projectId: String, datasetName: String, tableName: String, dataFile: String
-    ) {
-        val bigquery: BigQuery = BigQueryOptions.getDefaultInstance().getService()
+    suspend fun createDefaultStream(
+        service: BigQuery,
+        projectId: String,
+        datasetName: String,
+        tableName: String
+    ): JsonStreamWriter {
+        //val bigquery: BigQuery = BigQueryOptions.getDefaultInstance().getService()
         // Get the schema of the destination table and convert to the equivalent BigQueryStorage type.
-        val table: Table = bigquery.getTable(datasetName, tableName)
+        val table: Table = service.getTable(datasetName, tableName)
         val schema: Schema? = table.getDefinition<StandardTableDefinition>().getSchema()
         val tableSchema: TableSchema = BqToBqStorageSchemaConverter.convertTableSchema(schema!!) // force npe if null
-        val batchCount = AtomicInteger()
+        //val batchCount = AtomicInteger()
         // Use the JSON stream writer to send records in JSON format.
         val parentTable: TableName = TableName.of(projectId, datasetName, tableName)
 
         val client = BigQueryWriteClient.create()
 
-        JsonStreamWriter.newBuilder(parentTable.toString(), tableSchema, client).build().use { writer ->
-            // Read JSON data from the source file and send it to the Write API.
-            val reader = BufferedReader(FileReader(dataFile))
-            var line = reader.readLine()
-            while (line != null) {
-                // As a best practice, send batches of records, instead of single records at a time.
-                val jsonArr = JSONArray()
-                for (i in 0..99) {
-                    val record = JSONObject(line)
-                    jsonArr.put(record)
-                    line = reader.readLine()
-                    if (line == null) {
-                        break
-                    }
-                } // batch
-                val future: ApiFuture<AppendRowsResponse> = writer.append(jsonArr)
-                // The append method is asynchronous. Rather than waiting for the method to complete,
-                // which can hurt performance, register a completion callback and continue streaming.
-                ApiFutures.addCallback(future, object : ApiFutureCallback<AppendRowsResponse> {
-                    override fun onFailure(t: Throwable) {
-                        throw t
-                    }
-
-                    override fun onSuccess(result: AppendRowsResponse) {
-                        batchCount.incrementAndGet()
-                    }
-
-                }, MoreExecutors.directExecutor())
-            }
-        }
-
-        println("${batchCount.get()} Batches written")
+        return JsonStreamWriter.newBuilder(parentTable.toString(), tableSchema, client).build()
     }
+
 }
-
-//internal class AppendCompleteCallback : ApiFutureCallback<AppendRowsResponse?> {
-//    fun onSuccess(response: AppendRowsResponse) {
-//        synchronized(lock) {
-//            if (response.hasError()) {
-//                System.out.format("Error: %s\n", response.getError().toString())
-//            } else {
-//                ++batchCount
-//                System.out.format("Wrote batch %d\n", batchCount)
-//            }
-//        }
-//    }
-//
-//    fun onFailure(throwable: Throwable) {
-//        System.out.format("Error: %s\n", throwable.toString())
-//    }
-
-//    companion object {
-//        private var batchCount = 0
-//        private val lock = Any()
-//    }
-//}
 
 private object BqToBqStorageSchemaConverter {
     private val BQTableSchemaModeMap = mapOf(
