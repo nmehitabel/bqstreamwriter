@@ -4,7 +4,7 @@ package io.mehitabel.bqstreamwriter
 
 import io.mehitabel.bqstreamwriter.JsonWriterDefaultStream as JWS
 
-fun main(args: Array<String>) {
+suspend fun main(args: Array<String>) {
     if (args.size < 4) {
         println("Arguments: project, dataset, table, source_file")
         return
