@@ -29,6 +29,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
+ * Original usage in https://github.com/JetBrains/teamcity-google-agent/blob/master/google-cloud-server/src/main/kotlin/jetbrains/buildServer/clouds/google/connector/ApiFuture.kt
  * Awaits for completion of the future without blocking a thread.
  *
  * This suspending function is cancellable.
@@ -42,7 +43,9 @@ import kotlin.coroutines.resumeWithException
  */
 suspend fun <T> ApiFuture<T>.await(): T {
     try {
-        if (isDone) return get() as T
+        if (isDone) return withContext(Dispatchers.IO) {
+            get()
+        } as T
     } catch (e: ExecutionException) {
         throw e.cause ?: e // unwrap original cause from ExecutionException
     }

@@ -28,7 +28,7 @@ import com.google.common.util.concurrent.MoreExecutors
 //import org.jetbrains.kotlin.protobuf.Descriptors.DescriptorValidationException
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-
+import kotlinx.coroutines.flow.Flow
 
 import org.json.JSONArray
 import org.json.JSONObject
@@ -36,6 +36,8 @@ import java.io.*
 import java.util.concurrent.atomic.AtomicInteger
 
 object JsonWriterDefaultStream {
+
+    val batchCount = AtomicInteger()
     suspend fun run(
         projectId: String,
         datasetName: String,
@@ -43,39 +45,50 @@ object JsonWriterDefaultStream {
         dataFile: String
     ) {
 
-        val batchCount = AtomicInteger()
-
         val bigQueryService: BigQuery = BigQueryOptions.getDefaultInstance().getService()
-
         createDestinationTable(bigQueryService, projectId, datasetName, tableName)
 
-        coroutineScope {
-            createDefaultStream(bigQueryService, projectId, datasetName, tableName).use { jsWriter ->
-                getFileDataBatchedJson(dataFile)
-                    .onEach { ljo ->
-                        val future: ApiFuture<AppendRowsResponse> = jsWriter.append(JSONArray(ljo))
-                        // The append method is asynchronous. Rather than waiting for the method to complete,
-                        // which can hurt performance, register a completion callback and continue streaming.
-                        ApiFutures.addCallback(future, object : ApiFutureCallback<AppendRowsResponse> {
-                            override fun onFailure(t: Throwable) {
-                                throw t
-                            }
-
-                            override fun onSuccess(result: AppendRowsResponse) {
-                                batchCount.incrementAndGet()
-                            }
-
-                        }, MoreExecutors.directExecutor())
-                    }
-                    .collect()
-            }
+        val writer = createDefaultStream(bigQueryService, projectId, datasetName, tableName)
+        batchWrite(writer, dataFile).collect {
+            println(it.rowErrorsCount)
         }
+
         println("${batchCount.get()} Batches written")
 
     }
 
+    suspend fun batchWrite(jsw: JsonStreamWriter, sourcePath: String): Flow<AppendRowsResponse> =
+        jsonStreamWriter(jsw).flatMapConcat { jsWriter ->
+            getFileDataBatchedJson(sourcePath)
+                .map{chunk ->
+                     coroutineScope {
+                         val future: ApiFuture<AppendRowsResponse> = jsWriter.append(JSONArray(chunk))
+//                         future.await()
+                         ApiFutures.addCallback(future, object : ApiFutureCallback<AppendRowsResponse> {
+                             override fun onFailure(t: Throwable) {
+                                 throw t
+                             }
+                             override fun onSuccess(result: AppendRowsResponse) {
+                                 batchCount.incrementAndGet()
+                                 result
+                             }
+                        }, MoreExecutors.directExecutor())
+                        future.get()
+                    }
+                }
+        }
+    fun jsonStreamWriter(jsWriter: JsonStreamWriter): Flow<JsonStreamWriter> = flow {
+        jsWriter.use { emit(it)}
+    }
+
+
     fun InputStream.linesToFlow(): Flow<String> =
-        bufferedReader().lineSequence().asFlow().flowOn(Dispatchers.IO)
+        flow {
+            bufferedReader()
+                .useLines { lines ->
+                    lines.forEach { line -> emit(line) }
+                }
+        }
 
     fun getFileDataBatchedJson(dataFile: String): Flow<List<JSONObject>> {
         val reader: InputStream = FileInputStream(File(dataFile))
@@ -83,8 +96,8 @@ object JsonWriterDefaultStream {
             .linesToFlow()
             .map { it -> JSONObject(it) }
             .chunked(100)
+            .flowOn(Dispatchers.IO)
     }
-
 
     // createDestinationTable: Creates the destination table for streaming with the desired schema.
     fun createDestinationTable(
@@ -123,23 +136,18 @@ object JsonWriterDefaultStream {
     }
 
 
-    suspend fun createDefaultStream(
+    fun createDefaultStream(
         service: BigQuery,
         projectId: String,
         datasetName: String,
         tableName: String
     ): JsonStreamWriter {
-        //val bigquery: BigQuery = BigQueryOptions.getDefaultInstance().getService()
         // Get the schema of the destination table and convert to the equivalent BigQueryStorage type.
         val table: Table = service.getTable(datasetName, tableName)
         val schema: Schema? = table.getDefinition<StandardTableDefinition>().getSchema()
         val tableSchema: TableSchema = BqToBqStorageSchemaConverter.convertTableSchema(schema!!) // force npe if null
-        //val batchCount = AtomicInteger()
-        // Use the JSON stream writer to send records in JSON format.
         val parentTable: TableName = TableName.of(projectId, datasetName, tableName)
-
         val client = BigQueryWriteClient.create()
-
         return JsonStreamWriter.newBuilder(parentTable.toString(), tableSchema, client).build()
     }
 
