@@ -24,12 +24,10 @@ import com.google.cloud.bigquery.*
 import com.google.cloud.bigquery.storage.v1.*
 import com.google.cloud.bigquery.storage.v1.BigQueryWriteClient
 import com.google.common.util.concurrent.MoreExecutors
-//import com.google.protobuf.Descriptors.DescriptorValidationException
-//import org.jetbrains.kotlin.protobuf.Descriptors.DescriptorValidationException
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.Flow
-
+import arrow.fx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.*
@@ -38,6 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger
 object JsonWriterDefaultStream {
 
     val batchCount = AtomicInteger()
+
     suspend fun run(
         projectId: String,
         datasetName: String,
@@ -48,33 +47,42 @@ object JsonWriterDefaultStream {
         val bigQueryService: BigQuery = BigQueryOptions.getDefaultInstance().getService()
         createDestinationTable(bigQueryService, projectId, datasetName, tableName)
 
-        val writer = createDefaultStream(bigQueryService, projectId, datasetName, tableName)
-        batchWrite(writer, dataFile).collect {
-            println(it.rowErrorsCount)
-        }
-
+        val client = BigQueryWriteClient.create()
+        val writer = createDefaultStream(bigQueryService, client, projectId, datasetName, tableName)
+//        val streamName = writer.streamName
+        batchWrite(writer, dataFile)
+            .onCompletion {
+                if (!client.isShutdown) {
+                    client.close()
+                }
+            }
+            .collect {
+                println(it.rowErrorsCount)
+            }
+//        client.close()
         println("${batchCount.get()} Batches written")
 
     }
 
+    @OptIn(FlowPreview::class)
     suspend fun batchWrite(jsw: JsonStreamWriter, sourcePath: String): Flow<AppendRowsResponse> =
         jsonStreamWriter(jsw).flatMapConcat { jsWriter ->
             getFileDataBatchedJson(sourcePath)
-                .map{chunk ->
+                .parMapUnordered(concurrency = 2) { chunk ->
                      coroutineScope {
                          val future: ApiFuture<AppendRowsResponse> = jsWriter.append(JSONArray(chunk))
-//                         future.await()
-                         ApiFutures.addCallback(future, object : ApiFutureCallback<AppendRowsResponse> {
-                             override fun onFailure(t: Throwable) {
-                                 throw t
-                             }
-                             override fun onSuccess(result: AppendRowsResponse) {
-                                 batchCount.incrementAndGet()
-                                 result
-                             }
-                        }, MoreExecutors.directExecutor())
-                        future.get()
-                    }
+                         future.await()
+//                         ApiFutures.addCallback(future, object : ApiFutureCallback<AppendRowsResponse> {
+//                             override fun onFailure(t: Throwable) {
+//                                 throw t
+//                             }
+//                             override fun onSuccess(result: AppendRowsResponse) {
+//                                 batchCount.incrementAndGet()
+//                                 result
+//                             }
+//                        }, MoreExecutors.directExecutor())
+                        //future.get()
+                     }
                 }
         }
     fun jsonStreamWriter(jsWriter: JsonStreamWriter): Flow<JsonStreamWriter> = flow {
@@ -138,6 +146,7 @@ object JsonWriterDefaultStream {
 
     fun createDefaultStream(
         service: BigQuery,
+        writeClient: BigQueryWriteClient,
         projectId: String,
         datasetName: String,
         tableName: String
@@ -147,8 +156,7 @@ object JsonWriterDefaultStream {
         val schema: Schema? = table.getDefinition<StandardTableDefinition>().getSchema()
         val tableSchema: TableSchema = BqToBqStorageSchemaConverter.convertTableSchema(schema!!) // force npe if null
         val parentTable: TableName = TableName.of(projectId, datasetName, tableName)
-        val client = BigQueryWriteClient.create()
-        return JsonStreamWriter.newBuilder(parentTable.toString(), tableSchema, client).build()
+        return JsonStreamWriter.newBuilder(parentTable.toString(), tableSchema, writeClient).build()
     }
 
 }
